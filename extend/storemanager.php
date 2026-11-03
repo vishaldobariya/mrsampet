@@ -1,0 +1,203 @@
+<?php
+//--- Store Manager Custom Meta Fields Save (Vaccine)
+     function validate_and_sanitize_wpcpo($data) {
+        $clean = [];
+    
+        foreach ($data as $key => $group) {
+            // Basic validation
+            if (!is_array($group) || empty($group['options'])) continue;
+    
+            $clean[$key] = [
+                'type'     => sanitize_text_field($group['type'] ?? ''),
+                'title'    => sanitize_text_field($group['title'] ?? ''),
+                'desc'     => sanitize_text_field($group['desc'] ?? ''),
+                'required' => intval($group['required'] ?? 0),
+                'value'    => sanitize_text_field($group['value'] ?? ''),
+                'limit'    => sanitize_text_field($group['limit'] ?? ''),
+                'options'  => [],
+            ];
+    
+            foreach ($group['options'] as $opt_key => $option) {
+                $clean[$key]['options'][$opt_key] = [
+                    'name'         => sanitize_text_field($option['name'] ?? ''),
+                    'value'        => sanitize_text_field($option['value'] ?? ''),
+                    'price_type'   => sanitize_text_field($option['price_type'] ?? 'flat'),
+                    //'price'        => is_numeric($option['price']) ? (float)$option['price'] : 0,
+                    'price'        => is_numeric($option['price']) ? (string)$option['price'] : 0,
+                    'custom_price' => sanitize_text_field($option['custom_price'] ?? ''),
+                ];
+            }
+        }
+    
+        return $clean;
+    }
+
+    add_action('after_wcfm_products_manage_meta_save', 'ctvaccine_wpcpo_save', 200, 2);
+    function ctvaccine_wpcpo_save($new_product_id, $wcfm_products_manage_form_data) {
+        /*$is_new_val = !empty( $wcfm_products_manage_form_data['is_new_val'] ) ? 'yes' : 'no';
+        update_post_meta( $new_product_id, '_is_new_val', $is_new_val );*/
+        
+        global $wpdb, $WCFM, $_POST;
+        $product = wc_get_product($new_product_id);
+        $product_title = $product->get_title();
+        //get product price
+        $product_price = $product->get_price();
+        
+        //Get resource cost (visit) to update main product price if its null/ 0
+            $resource_ids = $product->get_resource_ids();
+            $resource_cost = 0;
+            
+            if (!empty($resource_ids)) {
+                $costs = get_post_meta($product->get_id(), '_resource_base_costs', true);
+                $resource_titles = ['clinic visit' => null, 'home visit' => null];
+            
+                foreach ($resource_ids as $resource_id) {
+                    $resource = get_post($resource_id);
+                    if (!$resource) continue;
+            
+                    $title = strtolower($resource->post_title);
+                    if (array_key_exists($title, $resource_titles) && isset($costs[$resource_id])) {
+                        $resource_titles[$title] = floatval($costs[$resource_id]);
+                    }
+                }
+            
+                // Prioritize clinic visit if cost > 0, else fallback to home visit
+                if (!is_null($resource_titles['clinic visit']) && $resource_titles['clinic visit'] > 0) {
+                    $resource_cost = $resource_titles['clinic visit'];
+                } elseif (!is_null($resource_titles['home visit'])) {
+                    $resource_cost = $resource_titles['home visit'];
+                }
+            }
+        
+        
+        //Only proceed if the product title contains the word "vaccine" (case-insensitive)
+        if (stripos($product_title, 'vaccine') === false) {
+            return; // Exit early if "vaccine" not in title
+        }
+        
+        $getwpcpoDisplay = get_post_meta( $product->get_id(), 'wpcpo-display', true );   //global or prepend
+        $getwpcpoFields = get_post_meta( $product->get_id(), 'wpcpo-fields', true );    //stores as json 
+        
+        //get acf fields
+            if ($product_title == "Dog Vaccine"){
+                $acfvaccine_groupid = 'group_680fe53bd00b9';    
+            }else if ($product_title == "Cat Vaccine"){
+                $acfvaccine_groupid = 'group_6837f94de2c1f';
+            }
+            
+            //$acfvaccine_groupid = 'group_680fe53bd00b9';
+            $fields = acf_get_fields($acfvaccine_groupid);
+            //$acfvaccine_fields = array();
+            $acfvaccine_fields = is_array($fields) ? $fields : [];
+        
+       // Helper: Map field labels to values
+            $acf_price_map = [];
+            foreach ($acfvaccine_fields as $field) {
+                $label = $field['label'];
+                $field_name = $field['name'];
+                //$value = isset($field['value']) ? $field['value'] : null;
+                $value = get_field($field_name, $product->get_id());
+                $acf_price_map[$label] = $value; //floatval($value);
+            }
+            
+        // Main structure
+            $main_key = !empty($getwpcpoFields) ? array_key_first($getwpcpoFields) : null;
+            $new_wpcpo = [
+                'wpcpo-pfpp' => [
+                    'type' => 'checkbox',
+                    'title' => 'Vaccine',
+                    'desc' => '',
+                    'required' => 1,
+                    'options' => [],
+                    'value' => '',
+                    'limit' => '',
+                ]
+            ];
+        
+        
+        // If exists, update prices
+            if ($main_key && isset($getwpcpoFields[$main_key]['options']) && empty(array_diff(array_keys($acf_price_map), array_column($getwpcpoFields[$main_key]['options'], 'name')))) {
+                foreach ($getwpcpoFields[$main_key]['options'] as $opt_key => $option) {
+                    $label = $option['name'];
+                    $price = $acf_price_map[$label] ?? null;
+                    $getwpcpoFields[$main_key]['options'][$opt_key]['price'] = $price;
+                }
+            
+                // Save updated meta
+                    $cleaned_getwpcpoFields = validate_and_sanitize_wpcpo($getwpcpoFields);
+                    update_post_meta($product->get_id(), 'wpcpo-fields', $cleaned_getwpcpoFields);
+                    
+                    if ($getwpcpoDisplay != "prepend"){
+                        update_post_meta($product->get_id(), 'wpcpo-display', 'prepend');
+                    }
+                    if ($product_price == "" || $product_price == "0"){
+                        //update_post_meta($product->get_id(), '_price', $resource_cost);
+                        update_product_price($product->get_id(), $resource_cost);
+                        
+                    }
+            
+            } else {
+                // Fallback key name if nothing exists
+                $fallback_key = 'wpcpo-' . substr(md5('Vaccine'), 0, 4);
+            
+                $new_wpcpo = [
+                    $fallback_key => [
+                        'type' => 'checkbox',
+                        'title' => 'Vaccine',
+                        'desc' => '',
+                        'required' => 1,
+                        'options' => [],
+                        'value' => '',
+                        'limit' => '',
+                    ]
+                ];
+            
+               // foreach ($acfvaccine_fields as $field) {
+               
+                foreach ($acfvaccine_fields as $index => $field) { //for geting label / vaccine name for default value
+                    $label = $field['label'];
+                    $value = $field['name'] ?? null;
+                    //$value = $acf_price_map[$label] ?? null;
+                    $slug = 'wpcpo-' . substr(md5($label), 0, 4);
+            
+                    $new_wpcpo[$fallback_key]['options'][$slug] = [
+                        'name' => $label,
+                        'value' => $value,
+                        'price_type' => 'flat',
+                        'price' => $value,
+                        'custom_price' => '',
+                    ];
+                }
+                
+            // Set default 'value' from the first option's 'value' field
+                $first_option = reset($new_wpcpo[$fallback_key]['options']);
+                $new_wpcpo[$fallback_key]['value'] = $first_option['value'] ?? '';
+            
+            // Save new meta
+                $cleaned_new_wpcpo = validate_and_sanitize_wpcpo($new_wpcpo);
+                update_post_meta($product->get_id(), 'wpcpo-fields', $cleaned_new_wpcpo);
+                if ($getwpcpoDisplay != "prepend"){
+                    update_post_meta($product->get_id(), 'wpcpo-display', 'prepend');
+                }
+                if ($product_price == "" || $product_price == "0"){
+                        //update_post_meta($product->get_id(), '_price', $resource_cost);
+                        update_product_price($product->get_id(), $resource_cost);
+                    }
+            }
+            
+    
+        
+          /*  error_log(print_r("--- - acfvaccine_fields  ----", true));
+            error_log(print_r($acfvaccine_fields, true));
+            error_log(print_r("---data-changed - acf_price_map  ----", true));
+            error_log(print_r($acf_price_map, true));
+            error_log(print_r("---data-changed - getwpcpoFields ----", true));
+            error_log(print_r($cleaned_getwpcpoFields, true));
+            error_log(print_r("---data-changed - new_wpcpo ----", true));
+            error_log(print_r($cleaned_new_wpcpo, true));
+            error_log(print_r("---end---", true));*/
+       
+    }
+   
+   
+?>

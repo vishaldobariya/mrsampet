@@ -1,0 +1,921 @@
+<?php
+    /** Custom Redirect to Login page instead of My Account **/
+        add_action('template_redirect','woo_check_loggedin');
+        function woo_check_loggedin(){
+            global $wp;
+            $myurlcheck = 'my-account';
+            $myurl = $_SERVER["REQUEST_URI"];
+            $myurl_array = explode('/',$myurl);
+            
+            //if ( is_page('my-account') && !is_user_logged_in() ) {
+            if ( (basename($myurl) == $myurlcheck) && !is_user_logged_in() ) {
+                wp_redirect( home_url('/login') );
+                die();
+          }
+        }
+    
+    /** Custom Redirect after Logins @ WooCommerce My Account **/
+       // add_filter( 'woocommerce_login_redirect', 'bbloomer_customer_login_redirect', 9999 );
+        function bbloomer_customer_login_redirect( $redirect_url ) {
+            $redirect_url = get_site_url() . '/my-account';
+            return $redirect_url;
+        }
+        
+        //for vendors on my account
+            function redirect_vendor_from_myaccount() {
+                if ( is_account_page() && is_user_logged_in() ) {
+                    $user = wp_get_current_user();
+                    //if ( in_array( 'wcfm_vendor', (array) $user->roles ) ) {
+                     if ( array_intersect( ['shop_manager','wcfm_vendor'], (array) $user->roles ) ) {    
+                        wp_safe_redirect( home_url('/store-manager/') );
+                        exit;
+                    }
+                }
+            }
+            add_action( 'template_redirect', 'redirect_vendor_from_myaccount' );
+    
+    /** Redirect after WooCommerce password reset **/
+        add_filter( 'woocommerce_reset_password_redirect', function( $redirect ) {
+            return home_url('/login');  // Where you want users to land
+        });
+    
+    
+    
+    /** Deny Login Upon Registration @ WooCommerce My Account **/
+       // add_filter( 'woocommerce_registration_auth_new_customer', '__return_false' );
+    
+    /** Add Short Description in Cart & Checkout & Order **/
+        //Display product short description in the Cart
+            /*add_filter( 'woocommerce_cart_item_name', 'add_short_description_to_cart_item', 10, 3 );
+            function add_short_description_to_cart_item( $product_name, $cart_item, $cart_item_key ) {
+                $product = $cart_item['data'];
+                
+                // Check if the product has a short description
+                if ( $short_description = $product->get_short_description() ) {
+                    
+                   /-* // Add a "Show Details" button
+                    $product_name .= '<button class="btn btn-sm btn-primary ckoutdescription-btn">Show Details</button>';
+                    
+                    // Add the short description inside a container that will be toggled
+                    $product_name .= '<div class="product-short-description-container d-none">';
+                    $product_name .= '<p class="product-short-description">' . $short_description . '</p>';
+                    $product_name .= '</div>';*-/
+                    
+                    $product_name .= '<p class="product-short-description">' . $short_description . '</p>';
+                }
+                
+                return $product_name;
+            }*/
+        
+        //Display product short description in the checkout
+            /* add_filter( 'woocommerce_checkout_cart_item_quantity', 'add_short_description_to_checkout', 10, 3 );
+            function add_short_description_to_checkout( $item_quantity, $cart_item, $cart_item_key ) {
+                $product = $cart_item['data'];
+                
+                // Check if the product has a short description
+                if ( $short_description = $product->get_short_description() ) {
+                    $item_quantity .= '<p class="product-short-description">' . $short_description . '</p>';
+                }
+                
+                return $item_quantity;
+            }*/
+        
+        //Display short description in the order details
+            add_action( 'woocommerce_order_item_meta_end', 'add_short_description_to_order', 10, 4 );
+            function add_short_description_to_order( $item_id, $item, $order, $plain_text ) {
+                $product = $item->get_product();
+                
+                // Check if the product has a short description
+                if ( $short_description = $product->get_short_description() ) {
+                    echo '<p class="product-short-description">' . $short_description . '</p>';
+                }
+            }
+    
+    /** Across Site show products added by wcfm_vendors only **/    
+        function restrict_products_by_wcfm_vendor_role( $query ) {
+            // Check if we are on the front-end and on the main query (not admin area)
+            if ( !is_admin() && $query->is_main_query() && ( is_shop() || is_product_category() || is_search() ) ) {
+                
+                // Get users with the 'wcfm_vendor' role
+                $vendor_users = get_users( array(
+                    'role'    => 'wcfm_vendor',  // Only users with the 'wcfm_vendor' role
+                    'fields'  => 'ID'            // We only need user IDs
+                ) );
+        
+                // Ensure only products from 'wcfm_vendor' users are shown
+                if ( !empty( $vendor_users ) ) {
+                    $query->set( 'author__in', $vendor_users );
+                }
+        
+                // Get users with the store name 'gpt' and exclude their products
+                $store_name = 'mrsam'; // The store name to exclude
+                $stores_to_exclude = get_users( array(
+                    'meta_key'   => 'store_name', // Correct meta key for store name
+                    'meta_value' => $store_name,  // The store name to exclude
+                    'fields'     => 'ID',         // Only get user IDs of these vendors
+                ) );
+        
+                // Exclude products from these users (vendors with store name 'gpt')
+                if ( !empty( $stores_to_exclude ) ) {
+                    $query->set( 'author__not_in', $stores_to_exclude );
+                }
+        
+                // Exclude products from admins explicitly
+                $admins = get_users( array(
+                    'role'    => 'administrator', // Get administrators
+                    'fields'  => 'ID'             // We only need user IDs
+                ) );
+        
+                // If we have admin users, exclude their products
+                if ( !empty( $admins ) ) {
+                    $query->set( 'author__not_in', array_merge( $query->get( 'author__not_in', array() ), $admins ) );
+                }
+                
+                
+                //EXCLUDE products with tag "Master"
+                $tax_query = (array) $query->get( 'tax_query', array() );
+        
+                $tax_query[] = array(
+                    'taxonomy' => 'product_tag',
+                    'field'    => 'slug',
+                    'terms'    => array( 'master' ), // slug must be lowercase
+                    'operator' => 'NOT IN',
+                );
+        
+                $query->set( 'tax_query', $tax_query );
+            }
+            if ( current_user_can( 'administrator' ) ) {
+                /*echo"<pre>";
+                print_r($query);
+                echo"</pre>";*/
+            }
+        }
+        add_action( 'pre_get_posts', 'restrict_products_by_wcfm_vendor_role' );
+
+
+/*---------- Changes to Archive pages ----------*/        
+     /**Displays WCFM all vendor products (duplicates) - that are added to "Add to my store" - by default its hidden **/
+            add_filter('wcfm_is_allow_product_loop_duplicate_hide', '__return_false');    
+            
+            
+    /*1. Modify Product Query Based on `plan` Parameter (title contains `plan`)*/
+        add_action( 'pre_get_posts', 'filter_products_by_plan_param' );
+        function filter_products_by_plan_param( $query ) {
+            /* Exit early if 'plan' is not in the URL
+                if ( ! isset( $_GET['plan'] ) || empty( $_GET['plan'] ) ) {
+                    return;
+                }
+            
+            // Only apply this filter on the main query and on the shop/archive/category pages
+                if ( ! is_admin() && $query->is_main_query() && ( is_shop() || is_product_category() || is_search() ) ) {
+                    // Get the 'plan' URL parameter
+                    $plan = isset( $_GET['plan'] ) ? sanitize_text_field( $_GET['plan'] ) : '';
+                    
+                    if ( $plan ) {
+                        // Modify the query to search product titles for the plan
+                        $query->set( 's', $plan );  // This will modify the search term, effectively filtering the products by title
+                    }
+                }
+            */
+            if ( ! is_admin() && $query->is_main_query() && ( is_shop() || is_product_category() || is_search() ) ) {
+                $raw_plan = isset( $_GET['plan'] ) ? trim( $_GET['plan'] ) : '';
+                if ( $raw_plan !== '' ) {
+                    $plan = sanitize_text_field( $raw_plan );
+                }
+                // If no valid 'plan' is provided, check if we should default it
+                elseif ( is_product_category( 'health-check-up' ) || is_product_category( 'pet-grooming' ) ) {
+                    $plan = 'Basic';
+                }
+                // Otherwise, exit early
+                else {
+                    return;
+                }
+        
+                // Apply the search filter with the resolved plan
+                $query->set( 's', $plan );
+            }
+        }        
+    
+    /**Change title of the products (bookable) to Vendor Name**/    
+        function replace_product_title_with_store_name( $title, $id ) {
+            // Only modify product titles on front-end product loops
+            if ( is_admin() || ! ( is_shop() || is_product_category() || is_search() ) ) {
+                return $title;
+            }
+        
+            if ( get_post_type( $id ) !== 'product' ) {
+                return $title;
+            }
+        
+            // Check if the product is a booking product
+            $product = wc_get_product( $id );
+            if ( ! $product || $product->get_type() !== 'booking' ) {
+                return $title;
+            }
+        
+            // Get the author (vendor) ID
+            $vendor_id = get_post_field( 'post_author', $id );
+        
+            // Get the store name using WCFM function
+            if ( function_exists( 'wcfm_get_vendor_store_name' ) ) {
+                $store_name = wcfm_get_vendor_store_name( $vendor_id );
+                if ( $store_name ) {
+                    return $store_name;
+                }
+            }
+        
+            return $title;
+        }
+        add_filter( 'the_title', 'replace_product_title_with_store_name', 10, 2 );
+
+    
+    /**Update pricing on shop/ archive pages to show resoure price based on url*/
+        add_filter('woocommerce_get_price_html', 'custom_booking_price_with_vaccine_options', 20, 2);
+        function custom_booking_price_with_vaccine_options($price_html, $product) {
+            
+            // Ensure we're on the correct pages (shop, category, or search)
+            if (is_admin() || !(is_shop() || is_product_category() || is_search())) {
+                return $price_html;
+            }
+        
+            // Apply only to booking products
+            if (!$product || $product->get_type() !== 'booking') {
+                return $price_html;
+            }
+        
+            // 1. Visit Resource Cost (Clinic or Home visit)
+            $visit = isset($_GET['visit']) ? sanitize_text_field($_GET['visit']) : 'clinic';
+            $resource_name = strtolower($visit . ' visit');
+            $resource_ids = $product->get_resource_ids();
+            $resource_cost = 0;
+        
+            if (!empty($resource_ids)) {
+                foreach ($resource_ids as $resource_id) {
+                    $resource = get_post($resource_id);
+                    if ($resource && strtolower($resource->post_title) === $resource_name) {
+                        $costs = get_post_meta($product->get_id(), '_resource_base_costs', true);
+                        if (isset($costs[$resource_id])) {
+                            $resource_cost = floatval($costs[$resource_id]);
+                        }
+                        break;
+                    }
+                }
+            }
+        
+            // 2. Vaccine Cost (WPC Options)
+            $vaccine_cost = 0;
+        
+            // Check if the product belongs to the vaccine category
+            if (has_term('vaccine', 'product_cat', $product->get_id())) {
+                $vaccine_param = isset($_GET['vaccine']) ? sanitize_text_field($_GET['vaccine']) : '';
+                if (!empty($vaccine_param)) {
+                    $selected_vaccines = array_map('trim', explode(',', $vaccine_param));
+
+                    // Fetch the meta data (WPC Product Options)
+                    $meta_raw = get_post_meta($product->get_id(), 'wpcpo-fields');
+                    if (!empty($meta_raw) && is_array($meta_raw)) {
+                        $wpcpo_fields = maybe_unserialize($meta_raw[0]);
+        
+                        if (is_array($wpcpo_fields)) {
+                            foreach ($wpcpo_fields as $field) {
+                                if (isset($field['options']) && is_array($field['options'])) {
+                                    foreach ($field['options'] as $option) {
+                                        $option_name = isset($option['value']) ? trim($option['value']) : '';
+                                        $option_price = isset($option['price']) ? floatval($option['price']) : 0;
+        
+                                        // Check if the option is selected, and add the price
+                                        if (in_array($option_name, $selected_vaccines)) {
+                                            $vaccine_cost += $option_price;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        
+            // 3. Combine Resource and Vaccine Prices
+            $total_price = $resource_cost + $vaccine_cost;
+        
+            // Return the new calculated price if applicable, otherwise return the original price
+            if ($total_price > 0) {
+                return wc_price($total_price);
+            }
+        
+            return $price_html;
+           
+        }
+        
+
+    /**2025.12.26 Fixing Sorting**/
+    /**2025.12.26 Fixing Sorting**/
+        
+        
+
+    /**Hide products with 0 pricing**/
+        add_action( 'woocommerce_product_query', 'wcfmwp_hide_products_without_price' );
+        function wcfmwp_hide_products_without_price( $q ){
+            if( is_admin() ) return $meta_query;
+            $meta_query = $q->get( 'meta_query' );
+            $meta_query[] = array(
+                'key'     => '_price',
+                'value'   => '',
+                'compare' => '!='
+            );
+            $meta_query[] = array(
+                'key'       => '_price',
+                'value'     => '0',
+                'compare'   => '!='
+            );
+            $q->set( 'meta_query', $meta_query );
+        }
+
+
+    /**Update Button to carry forward parameters**/
+        add_filter( 'woocommerce_loop_add_to_cart_link', 'custom_add_to_cart_button_with_url_params', 10, 2 );
+        function custom_add_to_cart_button_with_url_params( $link, $product ) {
+            // Check if we are on a shop or product category page
+            if ( is_shop() || is_product_category() || is_search() ) {
+                // Get the current URL parameters 'plan' and 'visit'
+                $plan = isset( $_GET['plan'] ) ? sanitize_text_field( $_GET['plan'] ) : '';
+                $visit = isset( $_GET['visit'] ) ? sanitize_text_field( $_GET['visit'] ) : '';
+                $pet = isset( $_GET['pet'] ) ? sanitize_text_field( $_GET['pet'] ) : '';
+                $vaccine = isset( $_GET['vaccine'] ) ? sanitize_text_field( $_GET['vaccine'] ) : '';
+        
+                // If we have parameters, append them to the product URL
+                if ( $plan || $visit || $pet || $vaccine ) {
+                    $product_url = get_permalink( $product->get_id() );
+                    $product_url = add_query_arg( 'plan', $plan, $product_url );
+                    if ( $visit ) {
+                        $product_url = add_query_arg( 'visit', $visit, $product_url );
+                    }
+                    if ( $pet ) {
+                        $product_url = add_query_arg( 'pet', $pet, $product_url );
+                    }
+                    if ( $vaccine ) {
+                        $product_url = add_query_arg( 'vaccine', $vaccine, $product_url );
+                    }
+                    
+                    // Replace the original Add to Cart URL with the modified URL
+                    $link = str_replace( get_permalink( $product->get_id() ), $product_url, $link );
+                }
+            }
+        
+            return $link;
+        }
+        
+    /** Modify the Add to Cart button text based on product type (bookable or not)**/
+        add_filter( 'woocommerce_loop_add_to_cart_link', 'custom_change_add_to_cart_button_text_loop', 10, 2 );
+        function custom_change_add_to_cart_button_text_loop( $link, $product ) {
+            // Check if the product is a bookable product
+            if ( $product->is_type( 'booking' ) ) {
+                // Change the button text to "Book Now" for bookable products
+                $link = str_replace( 'Select options', 'Book Now', $link );
+            } else {
+                // For non-bookable products, change the button text to "Buy Now"
+                $link = str_replace( 'Select options', 'Buy Now', $link );
+            }
+            return $link;
+        }
+    
+    /** Show vendor description after the product title on shop/archive/search pages**/
+        add_action( 'woocommerce_after_shop_loop_item_title', 'show_vendor_description_below_title', 5 );
+        function show_vendor_description_below_title() {
+            global $product;
+        
+            if ( ! $product || $product->get_type() !== 'booking' ) {
+                return;
+            }
+        
+            $vendor_id = get_post_field( 'post_author', $product->get_id() );
+            if ( $vendor_id ) {
+                $ct_store_drname = get_user_meta( $vendor_id, 'ct_store_drname', true );
+                $ct_store_drspeciality = get_user_meta( $vendor_id, 'ct_store_drspeciality', true );
+                $ct_store_drexperience = get_user_meta( $vendor_id, 'ct_store_drexperience', true );
+                $ct_store_drqualification = get_user_meta( $vendor_id, 'ct_store_drqualification', true );
+                
+                $description = get_user_meta( $vendor_id, '_store_description', true );
+                
+                //if ( !empty($ct_store_drname) || !empty($ct_store_drspeciality) || !empty($ct_store_drexperience) || !empty($ct_store_drqualification) ) {
+                if( has_term( array('Pet Grooming'), 'product_cat', $product->get_id() ) ){
+                    echo '<div class="vendor-description"> </div>';
+                }else{
+?>                    
+                   <div class="vendor-description">    
+                        
+                        <?php 
+                            if ( !empty($ct_store_drname) ) { ?>
+                                <span class="vendor-drname"> <?php echo esc_html( strip_tags( $ct_store_drname ) ); ?> </span>
+                        <?php 
+                            }
+                            if ( !empty($ct_store_drspeciality) ) { ?>
+                                <span class="vendor-drspl"> <?php echo esc_html( strip_tags( $ct_store_drspeciality ) ); ?> </span>
+                        <?php
+                            } 
+                            if ( !empty($ct_store_drexperience) ) { ?>
+                                <span class="vendor-drexp"><b>Experience: </b> <?php echo esc_html( strip_tags( $ct_store_drexperience ) ); ?> Yrs </span>
+                        <?php
+                            } 
+                            if ( !empty($ct_store_drqualification) ) { ?>
+                                <span class="vendor-drsqual"><b>Qualification: </b> <?php echo esc_html( strip_tags( $ct_store_drqualification ) ); ?> </span>
+                        <?php    } ?>
+                    
+                    </div>
+                    
+<?php                    
+                }
+                /*if ( $ct_store_drname ) {
+                    echo '<div class="vendor-drname">' . esc_html( strip_tags( $ct_store_drname ) ) . '</div>';
+                }
+                if ( $description ) {
+                    echo '<div class="vendor-description">' . esc_html( strip_tags( $description ) ) . '</div>';
+                }*/
+            }
+        }
+
+    /** Change ahref for Title & Image to custom url same as Book Now**/
+        // Wrap entire product card with custom URL including query params
+            add_action( 'woocommerce_before_shop_loop_item', 'custom_loop_product_link_open_with_params', 10 );
+            function custom_loop_product_link_open_with_params() {
+                global $product;
+            
+                $product_url = get_permalink( $product->get_id() );
+            
+                $params = array_filter([
+                    'plan'    => isset($_GET['plan'])    ? sanitize_text_field($_GET['plan'])    : '',
+                    'visit'   => isset($_GET['visit'])   ? sanitize_text_field($_GET['visit'])   : '',
+                    'pet'     => isset($_GET['pet'])     ? sanitize_text_field($_GET['pet'])     : '',
+                    'vaccine' => isset($_GET['vaccine']) ? sanitize_text_field($_GET['vaccine']) : '',
+                ]);
+            
+                if ( !empty($params) ) {
+                    $product_url = add_query_arg( $params, $product_url );
+                }
+            
+                echo '<a href="' . esc_url( $product_url ) . '" class="woocommerce-LoopProduct-link woocommerce-loop-product__link">';
+            }
+            
+            add_action( 'woocommerce_after_shop_loop_item', 'custom_loop_product_link_close_with_params', 5 );
+            function custom_loop_product_link_close_with_params() {
+                echo '</a>';
+            }
+            
+        // Replace title link href without removing default title output
+            add_action( 'woocommerce_shop_loop_item_title', 'custom_replace_title_link_start', 9 );
+            function custom_replace_title_link_start() {
+                ob_start();
+            }
+            
+            add_action( 'woocommerce_shop_loop_item_title', 'custom_replace_title_link_end', 11 );
+            function custom_replace_title_link_end() {
+                $original_title_html = ob_get_clean();
+            
+                global $product;
+            
+                $base_url = get_permalink( $product->get_id() );
+                $params = array_filter([
+                    'plan'    => isset($_GET['plan'])    ? sanitize_text_field($_GET['plan'])    : '',
+                    'visit'   => isset($_GET['visit'])   ? sanitize_text_field($_GET['visit'])   : '',
+                    'pet'     => isset($_GET['pet'])     ? sanitize_text_field($_GET['pet'])     : '',
+                    'vaccine' => isset($_GET['vaccine']) ? sanitize_text_field($_GET['vaccine']) : '',
+                ]);
+                $custom_url = !empty( $params ) ? add_query_arg( $params, $base_url ) : $base_url;
+            
+                $modified_title_html = preg_replace(
+                    '#href="[^"]*"#',
+                    'href="' . esc_url( $custom_url ) . '"',
+                    $original_title_html
+                );
+            
+                echo $modified_title_html;
+            }
+
+    
+
+/*---------- Changes to Archive pages Ends ----------*/
+
+
+    /**Single Product Page - home visit or clinic visit select by default > change dropdown & price**/
+        function add_visit_parameter_script_to_bookable_productnew() {
+            global $product, $post; 
+            // Check if we are on a product page and it's a bookable product
+            if (is_product() && $product->get_type() == 'booking') {
+                //Get tax settings
+                    $prices_include_tax = get_option( 'woocommerce_prices_include_tax' );
+                    $display_prices_in_shop = get_option( 'woocommerce_tax_display_shop' );
+                    $display_prices_in_cart = get_option( 'woocommerce_tax_display_cart' );
+                   
+                    $resource_costs = get_post_meta($product->id, '_resource_base_costs', true);
+                    $resources = $product->get_resources();
+                    $arrayVisit = [];
+                     foreach ( $resources as $resource  ) {
+                        $resource_name =  strtolower(trim(str_ireplace("Visit", "", $resource->get_name()))) ;
+                        $resource_id =  $resource->get_id();
+                        $arrayVisit[$resource_id] = ['name' => $resource_name, 'price' => $resource_costs[$resource_id]];
+                     }
+
+                    $arrayJsonEncode = json_encode($arrayVisit);
+                    
+                    
+                // Ensure the tax class is available
+                $taxClass = $product->get_tax_class();
+                if (empty($taxClass)) {
+                    $taxClass = '18-gst'; // Default tax class
+                }
+        
+                ?>
+                <script type="text/javascript">
+                    jQuery(document).ready(function($) {
+                       // console.log('Checking URL parameters...');
+                        let arrayVisit = JSON.parse('<?php echo $arrayJsonEncode; ?>');
+                        
+                        
+                        // Check if the 'visit' parameter exists in the URL
+                        var urlParams = new URLSearchParams(window.location.search);
+                        var visitParam = urlParams.get('visit');
+                        
+                        if (!visitParam) {
+                            visitParam = "clinic";
+                        }
+                        
+                        
+                       // console.log('visitParam:', visitParam);  // Debugging the URL parameter
+        
+                        // Only run the script if 'visit' parameter is available
+                        if (visitParam) {
+                            // Check if the resource dropdown exists
+                            var resourceDropdown = $('#wc_bookings_field_resource');
+                            
+                            //Function for renaming Clinic TO salon for Grooming
+                                function renameClinicToSalonIfGrooming() {
+                                    <?php if (has_term('pet-grooming', 'product_cat', $product->get_id())) : ?>
+                                    resourceDropdown.find('option').each(function () {
+                                        var optionText = $(this).text();
+                                        if (optionText.includes('Clinic Visit')) {
+                                            var newText = optionText.replace('Clinic Visit', 'Salon Visit');
+                                            $(this).text(newText);
+                                        }
+                                    });
+                                    <?php endif; ?>
+                                }
+                            //Function for renaming Clinic TO salon for Grooming
+                            
+                            if (resourceDropdown.length > 0) {
+                                //console.log('Resource dropdown found.');
+                                //Function called: Rename Clinic Visit to Salon Visit for Grooming Category
+                                    renameClinicToSalonIfGrooming();
+                                
+                                
+                                // Loop through the options to find the one matching the 'visit' parameter
+                                resourceDropdown.find('option').each(function() {
+                                    var optionValue = $(this).val();
+                                    var optionText = $(this).text();
+                                    
+                                   // console.log('Checking option value:', optionValue);  // Debugging option values
+        
+                                    // If the 'visit' parameter matches the option value
+                                    if ((visitParam === 'home' && optionValue === '4065') || (visitParam === 'clinic' && optionValue === '4066')) {
+                                        console.log('Match found, selecting option:', optionText);
+        
+                                        // Select the matching option
+                                        $(this).prop('selected', true);
+        
+                                        // Manually trigger the price update by calling the price update function directly
+                                        updatePriceBasedOnDropdownSelection(arrayVisit);
+                                    } 
+                                });
+                            }
+                        } else {
+                            console.log('No visit parameter found in the URL');
+                        }
+
+                         jQuery(".wpcpo-option-checkbox input[type='checkBox']").each(function() {
+                            jQuery(this).click(function(){
+                                let urlpramvaccine = null;
+                                jQuery(".wpcpo-option-checkbox input[type='checkBox']").each(function() {
+                                    if (jQuery(this).is(':checked')) {
+                                        if(urlpramvaccine == null)
+                                        {
+                                            urlpramvaccine = "";
+                                        }
+                                        urlpramvaccine +=  jQuery.trim(jQuery(this).val()) + ", ";
+                                    }
+                                });
+                                modifyURLParams('vaccine', urlpramvaccine);
+                                updatePriceBasedOnDropdownSelection(arrayVisit)
+                            });
+                         });
+
+                         // Event listener for dropdown change
+                        $(document).on('change', '#wc_bookings_field_resource', function() {
+                            let resouce_id = jQuery(this).val();
+                            //console.log(resouce_id, arrayVisit[resouce_id].name);
+                            //console.log('Dropdown value changed.');
+                            modifyURLParams('visit', arrayVisit[resouce_id].name);
+                            // Call the price update function when the dropdown value changes
+                            updatePriceBasedOnDropdownSelection(arrayVisit);
+                        });
+
+        
+                        // This function will update the price based on the dropdown selection
+                        function updatePriceBasedOnDropdownSelection(arrayVisit) {
+                            var selectedOption = resourceDropdown.find('option:selected');
+                            var priceId = selectedOption.val(); 
+                            //var priceMatch = priceText.match(/\+₹([\d\.]+)/); // Match the price part
+                            
+                            
+                            if (priceId) {
+                                //var price = parseFloat(priceMatch[1]); // Price from the option
+
+                                var price = 0;
+                                if(parseFloat(arrayVisit[priceId].price) > 0)
+                                {
+                                    price = parseFloat(arrayVisit[priceId].price);
+                                }
+
+                                 var urlParams = new URLSearchParams(window.location.search);
+                                 var petVaccine = urlParams.get('vaccine');
+
+                                  if(petVaccine != null)
+                                  {
+                                    if(petVaccine != 'null')
+                                    {
+                                      arrayPetVaccines = petVaccine.split(", ");
+                                      jQuery(".wpcpo-option-checkbox input[type='checkBox']").each(function() {
+                                        if(jQuery.inArray(jQuery(this).val(), arrayPetVaccines) !== -1)
+                                        {
+                                          jQuery(this).prop('checked', true);
+                                          price = price + parseFloat(jQuery(this).data('price'));
+                                        }
+                                      });
+                                    }
+                                  }
+                                // Get the tax rates for the product using the tax class
+                                var taxClass = '<?php echo $taxClass; ?>';
+                                var taxRates = <?php echo json_encode(WC_Tax::get_rates($taxClass)); ?>;
+                                
+                                //console.log('Tax Rates:', taxRates); // Debugging tax rates
+        
+                                // Initialize total tax rate
+                                var totalTaxRate = 0;
+        
+                                // Iterate over all the tax rates and add them together
+                                $.each(taxRates, function(taxKey, tax) {
+                                    totalTaxRate += tax.rate;  // Add the tax rate
+                                });
+        
+                                //console.log('Total Tax Rate:', totalTaxRate); // Debugging total tax rate
+        
+                                // Calculate the final price with tax
+                                var finalPrice = price; //+ (price * totalTaxRate / 100);
+                                
+                                // Update the price in the HTML (Product price)
+                                var priceElement = $('.elementor-widget-wolmart_sproduct_price .woocommerce-Price-amount.amount');
+                                if (priceElement.length > 0) {
+                                    var formattedPrice = finalPrice.toLocaleString('en-IN', { style: 'decimal', maximumFractionDigits: 2 });
+
+                                    //priceElement.html('<bdi><span class="woocommerce-Price-currencySymbol">₹</span>' + finalPrice.toFixed(2) + '</bdi>');
+                                    priceElement.html('<bdi><span class="woocommerce-Price-currencySymbol">₹</span>' + formattedPrice + '</bdi>');
+                                }
+        
+                               //console.log('Final price with tax:', finalPrice.toFixed(2));
+                            }
+                        }
+        
+                        
+                        function modifyURLParams(queryparam, newValue) {
+                            const url = new URL(window.location.href);
+                            url.searchParams.set(queryparam, newValue); // update only 'vaccine'
+                            history.pushState(null, '', url.toString()); // update the browser URL
+                        }
+        
+                    });
+
+                
+                </script>
+                <?php
+            }
+        }
+        add_action('wp_footer', 'add_visit_parameter_script_to_bookable_productnew');
+
+        /* Only updates dropdown and not the price of product
+        function add_visit_parameter_script_to_bookable_product() {
+            global $product, $post; 
+            // Check if we are on a product page and it's a bookable product
+            if (is_product() && $product->get_type() == 'booking') {
+                ?>
+                <script type="text/javascript">
+                    jQuery(document).ready(function($) {
+                        console.log('here');
+                        // Check if the 'visit' parameter exists in the URL
+                        var urlParams = new URLSearchParams(window.location.search);
+                        var visitParam = urlParams.get('visit');
+                        
+                        // Only run the script if 'visit' parameter is available
+                        if (visitParam) {
+                            // Check if the resource dropdown exists
+                            var resourceDropdown = $('#wc_bookings_field_resource');
+        
+                            if (resourceDropdown.length > 0) {
+                                // Loop through the options to find the one matching the 'visit' parameter
+                                resourceDropdown.find('option').each(function() {
+                                    var optionValue = $(this).val();
+        
+                                    if ((visitParam === 'home' && optionValue === '4065') || 
+                                        (visitParam === 'clinic' && optionValue === '4066')) {
+                                        // Select the matching option
+                                        $(this).prop('selected', true);
+                                        
+                                        // Trigger change event on the dropdown to update the price
+                                        resourceDropdown.trigger('change');
+                                        
+                                       
+                                    }
+                                });
+                            }
+                        }
+                    });
+                </script>
+                <?php
+            }
+        }
+        add_action('wp_footer', 'add_visit_parameter_script_to_bookable_product');*/
+
+
+    /**Open cart on product add to cart**/
+        function open_fly_cart_on_add_to_cart() {
+            if ( is_product() ){
+            ?>
+            <script type="text/javascript">
+                jQuery(document).ready(function($) {
+                    console.log("Fly cart script is loaded.");
+        
+                    // Function to check for the 'alert-success' notification
+                    function checkNotification() {
+                        // Only trigger once if the notification is found
+                        if ($('.woocommerce-notices-wrapper').find('.alert-success').length > 0) {
+                            console.log("Product added to cart notification found. Opening the fly cart.");
+        
+                            // Check if the cart is already opened by checking for the 'opened' class
+                            var cartWrapper = $('.dropdown.mini-basket-dropdown.cart-dropdown.block-type.badge-type.cart-offcanvas');
+                            if (!cartWrapper.hasClass('opened')) {
+                                console.log("Fly cart is not open, opening the fly cart.");
+                                
+                                // Open the fly cart by triggering a click event on the cart-toggle button
+                                var cartToggle = $('.cart-toggle');
+                                if (cartToggle.length) {
+                                    cartToggle.click();
+                                } else {
+                                    console.log("Cart toggle element not found.");
+                                }
+                            } else {
+                                console.log("Fly cart is already open.");
+                            }
+        
+                            // Stop further checks once the cart has been opened
+                            clearInterval(notificationCheckInterval);
+                        }
+                    }
+        
+                    // Perform an initial check immediately
+                    checkNotification();
+        
+                    // Check every second for the notification
+                    var notificationCheckInterval = setInterval(function() {
+                        checkNotification();
+                    }, 3000);
+                });
+            </script>
+            <?php
+        }
+        }
+        add_action('wp_footer', 'open_fly_cart_on_add_to_cart');
+
+    /*Toggle Item Data in cart (Show/ Hide)*/
+        function customCkOut_enqueue_scripts() {
+            //if (is_checkout() || is_cart()) {
+                wp_enqueue_script('customCkOut-toggle', WP_STATICASSET_FOLDERNAME . '/js/checkout-toggle-ItemData.js', array('jquery'), null, true);
+        
+            //}
+        }
+        add_action('wp_enqueue_scripts', 'customCkOut_enqueue_scripts');
+
+  
+    /**Hide Shipping Address if cart has only bookable products**/
+        add_action( 'woocommerce_checkout_fields', 'conditionally_remove_shipping_fields_for_booking_products' );
+        function conditionally_remove_shipping_fields_for_booking_products( $fields ) {
+            if( is_checkout() ){
+                // Flag to check if cart contains only booking products
+                $only_booking_products = true;
+                // Loop through each product in the cart
+                foreach ( WC()->cart->get_cart() as $cart_item ) {
+                    $product = $cart_item['data'];
+                    // If a non-booking product is found, set the flag to false
+                    if ( 'booking' !== $product->get_type() ) {
+                        $only_booking_products = false;
+                        break; // Exit loop if any non-booking product is found
+                    }
+                }
+            
+                // If the cart contains only booking products, remove the shipping fields
+                if ( $only_booking_products ) {
+                    // Unset the entire shipping section, including the checkbox and address fields
+                    unset( $fields['shipping'] );
+                    echo "<style>#customer_details .woocommerce-shipping-fields{display:none !important;}</style>";
+                }
+            
+                return $fields;
+            }    
+        }
+
+    
+    /**Check Terms & Conditions by default on Checkout page**/
+        add_action( 'wp_footer', 'custom_default_terms_checked_script' );
+        function custom_default_terms_checked_script() {
+            if ( is_checkout() && ! is_order_received_page() ) : ?>
+                <script type="text/javascript">
+                    document.addEventListener('DOMContentLoaded', function() {
+                        const termsCheckbox = document.querySelector('#terms');
+                        if (termsCheckbox && !termsCheckbox.checked) {
+                            termsCheckbox.checked = true;
+                        }
+                    });
+                </script>
+            <?php
+            endif;
+        }
+
+    
+    /**Continue Shopping Button - Get URL History**/
+        add_filter('woocommerce_continue_shopping_redirect', 'custom_continue_shopping_redirect');
+        function custom_continue_shopping_redirect() {
+            // Check if HTTP referrer exists and is not the cart page itself
+            $referrer = wp_get_referer();
+        
+            if ($referrer && strpos($referrer, 'cart') === false) {
+                return esc_url($referrer);
+            }
+        
+            // Fallback to shop page
+            return home_url('/');
+        }
+
+
+    /**Remove .00 in price on archive pages**/
+        add_filter('woocommerce_get_price_html', 'custom_trim_decimal_zeros_archive_only', 20, 2);
+        function custom_trim_decimal_zeros_archive_only($price, $product) {
+            if (is_shop() || is_product_category() || is_product_tag()) {
+                // Remove trailing .00 from the price
+                $price = preg_replace('/(\.00)(?![\d])/', '', $price);
+            }
+            return $price;
+        }
+
+
+    /**Fixing Resource cost Issue from Single page to cart page**/
+             add_action('woocommerce_after_calculate_totals', 'adjust_booking_price_with_wpc_options', 999);
+        function adjust_booking_price_with_wpc_options($cart) {
+            if (is_admin() && !defined('DOING_AJAX')) return;
+        
+            foreach ($cart->get_cart() as $cart_item_key => &$cart_item) {
+                if (!isset($cart_item['booking'])) continue;
+        
+                $booking_data = $cart_item['booking'];
+        
+                // Get the selected resource cost
+                $resource_cost = isset($booking_data['_cost']) ? floatval($booking_data['_cost']) : 0;
+        
+                // Sum WPC options prices
+                $options_total = 0;
+                if (!empty($cart_item['wpcpo-options']) && is_array($cart_item['wpcpo-options'])) {
+                    foreach ($cart_item['wpcpo-options'] as $option) {
+                        if (!empty($option['price']) && is_numeric($option['price'])) {
+                            $options_total += floatval($option['price']);
+                        }
+                    }
+                }
+        
+                // Calculate the new price
+                $new_price = $resource_cost + $options_total;
+        
+                // Set the new price
+                $cart_item['data']->set_price($new_price);
+            }
+        }
+
+    /**Fixing Resource cost Issue from Single page to cart page**/
+
+        
+       
+/*Action Scheduler Auto Cleanup*/
+    add_filter( 'action_scheduler_retention_period', 'custom_action_scheduler_retention_period' );
+    function custom_action_scheduler_retention_period( $interval ) {
+        return DAY_IN_SECONDS * 7; // Keep logs for 7 days instead of 30
+    }
+
+
+
+
+
+?>
